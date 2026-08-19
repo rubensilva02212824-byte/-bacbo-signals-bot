@@ -3,103 +3,80 @@ import logging
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
-)
+logging.basicConfig(level=logging.INFO)
 
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 
-# Estado do sistema
-historico = []
-
+# Estado
 sinal_atual = None
-nivel = 0  # 0 = sinal inicial, 1 = Gale 1, 2 = Gale 2
-
+gale = 0
 greens_seguidas = 0
+
+historico = []
 total_greens = 0
 total_losses = 0
 
 
-def calcular_sinal():
-    """
-    Escolhe a cor com maior frequência no histórico.
-    Isto é apenas uma heurística estatística e não prevê
-    o resultado seguinte.
-    """
+def novo_sinal():
+    global sinal_atual, gale
 
-    if not historico:
-        return "azul"
-
+    # Heurística simples baseada no histórico.
+    # Não garante previsão do próximo resultado.
     azuis = historico.count("azul")
     vermelhos = historico.count("vermelho")
 
     if azuis > vermelhos:
-        return "azul"
+        sinal_atual = "azul"
+    else:
+        sinal_atual = "vermelho"
 
-    if vermelhos > azuis:
-        return "vermelho"
-
-    # Em caso de empate estatístico
-    return "azul"
+    gale = 0
+    return sinal_atual
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🎲 BAC BO SIGNALS PT\n\n"
-        "🟢 Bot online!\n\n"
+        "🟢 BOT ONLINE\n\n"
         "Comandos:\n"
         "/sinal - Novo sinal\n"
         "/resultado azul\n"
         "/resultado vermelho\n"
         "/resultado empate\n"
-        "/historico - Ver histórico\n"
-        "/estatisticas - Ver estatísticas"
+        "/estatisticas\n"
+        "/historico"
     )
 
 
 async def sinal(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global sinal_atual, nivel
+    global sinal_atual, gale
 
-    if sinal_atual is None:
-        sinal_atual = calcular_sinal()
-        nivel = 0
-
-        cor = "🔵 AZUL" if sinal_atual == "azul" else "🔴 VERMELHO"
-
+    if sinal_atual is not None:
         await update.message.reply_text(
-            f"{cor}\n"
-            "🛡️ PROTEGE EMPATE\n\n"
-            f"🔥 GREENS SEGUIDAS: {greens_seguidas}"
+            "⚠️ Já existe um sinal em andamento."
         )
-    else:
-        await update.message.reply_text(
-            "⚠️ Já existe um sinal em andamento.\n"
-            "Aguarda o resultado desta ronda."
-        )
+        return
+
+    cor = novo_sinal()
+
+    emoji = "🔵" if cor == "azul" else "🔴"
+
+    await update.message.reply_text(
+        f"{emoji} {cor.upper()}\n"
+        "🛡️ PROTEGE EMPATE\n\n"
+        f"🔥 GREENS SEGUIDAS: {greens_seguidas}"
+    )
 
 
 async def resultado(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global sinal_atual
-    global nivel
+    global gale
     global greens_seguidas
     global total_greens
     global total_losses
 
     if not context.args:
         await update.message.reply_text(
-            "Utilização:\n"
-            "/resultado azul\n"
-            "/resultado vermelho\n"
-            "/resultado empate"
-        )
-        return
-
-    resultado_recebido = context.args[0].lower().strip()
-
-    if resultado_recebido not in ["azul", "vermelho", "empate"]:
-        await update.message.reply_text(
-            "❌ Resultado inválido.\n\n"
             "Usa:\n"
             "/resultado azul\n"
             "/resultado vermelho\n"
@@ -107,23 +84,30 @@ async def resultado(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    historico.append(resultado_recebido)
+    resultado = context.args[0].lower().strip()
 
-    if sinal_atual is None:
+    if resultado not in ("azul", "vermelho", "empate"):
         await update.message.reply_text(
-            "📊 Resultado registado.\n\n"
-            "Ainda não existe um sinal ativo.\n"
-            "Usa /sinal para iniciar."
+            "❌ Resultado inválido."
         )
         return
 
-    # Empate protegido = GREEN
-    if resultado_recebido == "empate":
+    historico.append(resultado)
+
+    if sinal_atual is None:
+        await update.message.reply_text(
+            "📊 Resultado guardado.\n"
+            "Usa /sinal para iniciar um sinal."
+        )
+        return
+
+    # EMPATE = GREEN devido à proteção
+    if resultado == "empate":
         greens_seguidas += 1
         total_greens += 1
 
         sinal_atual = None
-        nivel = 0
+        gale = 0
 
         await update.message.reply_text(
             "🟢 GREEN\n"
@@ -132,13 +116,13 @@ async def resultado(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Resultado igual ao sinal = GREEN
-    if resultado_recebido == sinal_atual:
+    # Acertou a cor
+    if resultado == sinal_atual:
         greens_seguidas += 1
         total_greens += 1
 
         sinal_atual = None
-        nivel = 0
+        gale = 0
 
         await update.message.reply_text(
             "🟢 GREEN\n\n"
@@ -146,29 +130,30 @@ async def resultado(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Resultado contrário
-    if nivel == 0:
-        nivel = 1
+    # Falhou o sinal inicial
+    if gale == 0:
+        gale = 1
 
         await update.message.reply_text(
             "⚠️ GALE 1"
         )
         return
 
-    if nivel == 1:
-        nivel = 2
+    # Falhou Gale 1
+    if gale == 1:
+        gale = 2
 
         await update.message.reply_text(
             "⚠️ GALE 2"
         )
         return
 
-    # Perdeu sinal + Gale 1 + Gale 2
+    # Falhou Gale 2
     total_losses += 1
     greens_seguidas = 0
 
     sinal_atual = None
-    nivel = 0
+    gale = 0
 
     await update.message.reply_text(
         "🛑 NÃO FOI DESTA\n"
@@ -176,47 +161,36 @@ async def resultado(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def estatisticas(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "📊 ESTATÍSTICAS\n\n"
+        f"🟢 Greens: {total_greens}\n"
+        f"🔴 Losses: {total_losses}\n"
+        f"🔥 Greens seguidas: {greens_seguidas}\n"
+        f"🎲 Resultados registados: {len(historico)}"
+    )
+
+
 async def historico_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not historico:
         await update.message.reply_text(
-            "📊 Ainda não existem resultados registados."
+            "📊 Ainda não existem resultados."
         )
         return
 
     ultimos = historico[-20:]
 
-    texto = "📊 ÚLTIMOS RESULTADOS\n\n"
+    texto = "📊 HISTÓRICO\n\n"
 
-    for i, resultado_item in enumerate(ultimos, 1):
-        if resultado_item == "azul":
-            emoji = "🔵"
-        elif resultado_item == "vermelho":
-            emoji = "🔴"
+    for resultado in ultimos:
+        if resultado == "azul":
+            texto += "🔵 "
+        elif resultado == "vermelho":
+            texto += "🔴 "
         else:
-            emoji = "🟡"
-
-        texto += f"{i}. {emoji} {resultado_item.upper()}\n"
+            texto += "🟡 "
 
     await update.message.reply_text(texto)
-
-
-async def estatisticas(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    total = len(historico)
-
-    azuis = historico.count("azul")
-    vermelhos = historico.count("vermelho")
-    empates = historico.count("empate")
-
-    await update.message.reply_text(
-        "📊 ESTATÍSTICAS\n\n"
-        f"🎲 Resultados: {total}\n"
-        f"🔵 Azul: {azuis}\n"
-        f"🔴 Vermelho: {vermelhos}\n"
-        f"🟡 Empates: {empates}\n\n"
-        f"🟢 Total Greens: {total_greens}\n"
-        f"🔴 Total Losses: {total_losses}\n"
-        f"🔥 Greens seguidas: {greens_seguidas}"
-    )
 
 
 def main():
@@ -230,10 +204,10 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("sinal", sinal))
     app.add_handler(CommandHandler("resultado", resultado))
-    app.add_handler(CommandHandler("historico", historico_cmd))
     app.add_handler(CommandHandler("estatisticas", estatisticas))
+    app.add_handler(CommandHandler("historico", historico_cmd))
 
-    logging.info("Bac Bo Signals PT iniciado.")
+    print("🎲 Bac Bo Signals PT iniciado!")
 
     app.run_polling(drop_pending_updates=True)
 
